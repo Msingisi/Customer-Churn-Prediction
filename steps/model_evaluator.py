@@ -1,18 +1,15 @@
 from typing import Dict, Tuple
 import numpy as np
 import pandas as pd
-import plotly.graph_objects as go
 import plotly.express as px
+import plotly.graph_objects as go
 import xgboost as xgb
 from sklearn.metrics import (
     accuracy_score,
     precision_score,
     recall_score,
-    roc_auc_score,
-    auc,
+    f1_score,
     confusion_matrix,
-    precision_recall_curve,
-    roc_curve,
 )
 from typing_extensions import Annotated
 from zenml import step
@@ -22,8 +19,8 @@ from zenml.types import HTMLString
 def generate_evaluation_html(
     y_test: pd.Series,
     y_pred: np.ndarray,
-    y_pred_proba: np.ndarray,
     metrics: Dict[str, float],
+    feature_importance_fig: go.Figure,
 ) -> str:
     """Generate HTML visualization of model evaluation results."""
 
@@ -41,52 +38,10 @@ def generate_evaluation_html(
     cm_fig.update_layout(width=600, height=500)
     cm_html = cm_fig.to_html(full_html=False, include_plotlyjs="cdn")
 
-    # ROC Curve
-    fpr, tpr, _ = roc_curve(y_test, y_pred_proba)
-    roc_fig = go.Figure()
-    roc_fig.add_trace(go.Scatter(x=fpr, y=tpr, mode="lines", name=f"ROC (AUC = {metrics['roc_auc']:.3f})"))
-    roc_fig.add_trace(go.Scatter(x=[0, 1], y=[0, 1], mode="lines", name="Random", line=dict(dash="dash", color="gray")))
-    roc_fig.update_layout(
-        title="ROC Curve",
-        xaxis_title="False Positive Rate",
-        yaxis_title="True Positive Rate",
-        width=600,
-        height=500,
-        template="plotly_white",
-    )
-    roc_html = roc_fig.to_html(full_html=False, include_plotlyjs="cdn")
+    # Feature Importance HTML
+    feature_importance_html = feature_importance_fig.to_html(full_html=False, include_plotlyjs="cdn")
 
-    # Precision-Recall Curve
-    precision, recall, _ = precision_recall_curve(y_test, y_pred_proba)
-    pr_fig = go.Figure()
-    pr_fig.add_trace(go.Scatter(x=recall, y=precision, mode="lines", name=f"PR (AUC = {metrics['pr_auc']:.3f})"))
-    pr_fig.update_layout(
-        title="Precision-Recall Curve",
-        xaxis_title="Recall",
-        yaxis_title="Precision",
-        width=600,
-        height=500,
-        template="plotly_white",
-    )
-    pr_html = pr_fig.to_html(full_html=False, include_plotlyjs="cdn")
-
-    # Prediction Probability Distribution
-    pred_df = pd.DataFrame({"actual": y_test, "predicted_proba": y_pred_proba})
-    dist_fig = px.histogram(
-        pred_df,
-        x="predicted_proba",
-        color="actual",
-        nbins=30,
-        opacity=0.7,
-        barmode="overlay",
-        title="Distribution of Prediction Probabilities",
-        labels={"predicted_proba": "Predicted Probability", "actual": "Actual Churn"},
-        color_discrete_map={0: "#636EFA", 1: "#E64E33"},
-    )
-    dist_fig.update_layout(width=700, height=500, template="plotly_white")
-    dist_html = dist_fig.to_html(full_html=False, include_plotlyjs="cdn")
-
-    # Build HTML
+    # HTML Page
     html_parts = ["""
     <html><head><style>
         body { font-family: Arial; background-color: #f9f9f9; padding: 20px; }
@@ -107,10 +62,9 @@ def generate_evaluation_html(
         <div class="metrics">
     """]
 
-    # Metric cards
     for name, color in zip(
-        ["accuracy", "precision", "recall", "roc_auc", "pr_auc"],
-        ["#f0f8ff", "#fff8f0", "#f0fff8", "#e8f0fe", "#ffe4e1"],
+        ["accuracy", "precision", "recall", "f1"],
+        ["#f0f8ff", "#fff8f0", "#f0fff8", "#e8f0fe"],
     ):
         html_parts.append(f"""
         <div class="metric-card" style="background-color: {color};">
@@ -122,11 +76,8 @@ def generate_evaluation_html(
     html_parts.append("</div><div class='row'>")
 
     # Plots
-    html_parts.append(f"<div class='column'><div class='plot-container'><h3>Confusion Matrix</h3>{cm_html}</div>")
-    html_parts.append(f"<div class='plot-container'><h3>ROC Curve</h3>{roc_html}</div></div>")
-
-    html_parts.append(f"<div class='column'><div class='plot-container'><h3>Precision-Recall Curve</h3>{pr_html}</div>")
-    html_parts.append(f"<div class='plot-container'><h3>Prediction Distribution</h3>{dist_html}</div></div>")
+    html_parts.append(f"<div class='column'><div class='plot-container'><h3>Confusion Matrix</h3>{cm_html}</div></div>")
+    html_parts.append(f"<div class='column'><div class='plot-container'><h3>Feature Importances</h3>{feature_importance_html}</div></div>")
 
     html_parts.append("</div></div></body></html>")
     return "".join(html_parts)
@@ -144,23 +95,37 @@ def evaluate_model(
     """Evaluates XGBoost classifier and returns metrics + visual report."""
 
     y_pred = model.predict(X_test)
-    y_pred_proba = model.predict_proba(X_test)[:, 1]
 
     # Metrics
     accuracy = accuracy_score(y_test, y_pred)
     precision_val = precision_score(y_test, y_pred)
     recall_val = recall_score(y_test, y_pred)
-    roc_auc = roc_auc_score(y_test, y_pred_proba)
-    precision, recall, _ = precision_recall_curve(y_test, y_pred_proba)
-    pr_auc = auc(recall, precision)
+    f1 = f1_score(y_test, y_pred)
 
     metrics = {
         "accuracy": accuracy,
         "precision": precision_val,
         "recall": recall_val,
-        "roc_auc": roc_auc,
-        "pr_auc": pr_auc,
+        "f1": f1,
     }
 
-    html_report = generate_evaluation_html(y_test, y_pred, y_pred_proba, metrics)
+    # Feature Importance: Top 10
+    booster = model.get_booster()
+    importance = booster.get_score(importance_type='gain')
+    importance_df = pd.DataFrame(
+        list(importance.items()), columns=["feature", "importance"]
+    ).sort_values(by="importance", ascending=True).head(10)
+
+    feature_fig = px.bar(
+        importance_df,
+        x="importance",
+        y="feature",
+        orientation="h",
+        title="Feature Importances (by Gain)",
+        labels={"importance": "Importance", "feature": "Feature"},
+        color_discrete_sequence=["royalblue"],
+    )
+    feature_fig.update_layout(height=400)
+
+    html_report = generate_evaluation_html(y_test, y_pred, metrics, feature_fig)
     return metrics, HTMLString(html_report)
