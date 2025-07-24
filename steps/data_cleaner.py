@@ -29,17 +29,5 @@ def clean_data_step(df: pd.DataFrame) -> pd.DataFrame:
     if 'Status' in data.columns:
         data['Status'] = data['Status'].map({1: 'Active', 2: 'Non-active'})
 
-    # if 'Charge Amount' in data.columns:
-    #      # Remove rows where Charge Amount is 10
-    #     data = [data['Charge  Amount'] != 10]
-
-    # # Categorize Charge Amount into Low, Medium, High
-    # if 'Charge  Amount' in data.columns:
-    #     data['Charge  Amount'] = pd.cut(
-    #         data['Charge  Amount'],
-    #         bins=[0, 3, 6, 9],
-    #         labels=['Low', 'Medium', 'High']
-    #         )
-
     logging.info("Data cleaning complete.")
     return data
