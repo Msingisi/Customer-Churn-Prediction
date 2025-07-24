@@ -7,7 +7,7 @@ A production-ready MLOps pipeline for predicting customer churn using XGBoost.
 
 <div align="center">
   <br/>
-    <img alt="Training Pipeline DAG" src="assets/training_pipelie.png" width="70%">
+    <img alt="Training Pipeline DAG" src="assets/training_pipeline.png" width="70%">
   <br/>
   <p><em>ZenML visualization of the training pipeline DAG</em></p>
 </div>
